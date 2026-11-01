@@ -1,0 +1,82 @@
+name: Build ARM32 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "master"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Switch the build to 32-bit (armeabi-v7a)
+        run: |
+          sed -i "s/abiFilters 'arm64-v8a'/abiFilters 'armeabi-v7a'/" app/build.gradle
+          sed -i '0,/versionName getGitTag()/s//versionName getGitTag()\n        versionNameSuffix "-arm32"/' app/build.gradle
+          grep -n "abiFilters\|versionNameSuffix" app/build.gradle
+
+      - name: CI-only google-services.json (the app expects the file to exist)
+        run: |
+          mkdir -p app
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {"project_number": "000000000000", "project_id": "ci-placeholder", "storage_bucket": "ci-placeholder.appspot.com"},
+            "client": [{
+              "client_info": {"mobilesdk_app_id": "1:000000000000:android:0000000000000000000000", "android_client_info": {"package_name": "org.levimc.launcher"}},
+              "oauth_client": [],
+              "api_key": [{"current_key": "AIzaSyCIOnlyPlaceholderKey"}],
+              "services": {"appinvite_service": {"other_platform_oauth_client": []}}
+            }],
+            "configuration_version": "1"
+          }
+          JSON
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "build-tools;35.0.0" "platforms;android-36" "cmake;3.22.1"
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: "2.9.9"
+
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+          link-to-sdk: true
+
+      - name: Build debug APK (armeabi-v7a)
+        run: |
+          chmod +x ./gradlew
+          echo "curseforge.api_key=" >> local.properties
+          set -o pipefail
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LeviLauncher-arm32-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
